@@ -93,7 +93,7 @@ task :simulator => ['build:simulator'] do
   # Launch the simulator.
   xcode = App.config.xcode_dir
   env = xcode.match(/^\/Applications/) ? "DYLD_FRAMEWORK_PATH=\"#{xcode}/../Frameworks\":\"#{xcode}/../OtherFrameworks\"" : ''
-  env << ' NO_FOREGROUND_SIM=1' if App.config.spec_mode
+  env << ' SIM_SPEC_MODE=1' if App.config.spec_mode
   sim = File.join(App.config.bindir, 'sim')
   debug = (ENV['debug'] ? 1 : (App.config.spec_mode ? '0' : '2'))
   App.info 'Simulate', app
@@ -116,10 +116,22 @@ namespace :archive do
   end
 end
 
-desc "Run the test/spec suite"
-task :spec do
-  App.config.spec_mode = true
-  Rake::Task["simulator"].invoke
+desc "Same as 'spec:simulator'"
+task :spec => ['spec:simulator']
+
+namespace :spec do
+  desc "Run the test/spec suite on the simulator"
+  task :simulator do
+    App.config.spec_mode = true
+    Rake::Task["simulator"].invoke
+  end
+
+  desc "Run the test/spec suite on the device"
+  task :device do
+    App.config.spec_mode = true
+    ENV['debug'] ||= '1'
+    Rake::Task["device"].invoke
+  end
 end
 
 desc "Build and Deploy on the device"

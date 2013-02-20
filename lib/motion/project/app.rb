@@ -106,9 +106,20 @@ module Motion; module Project
           File.open('.gitignore', 'w') do |io|
             io.puts ".repl_history"
             io.puts "build"
+            io.puts "tags"
+            io.puts "app/pixate_code.rb"
             io.puts "resources/*.nib"
             io.puts "resources/*.momd"
             io.puts "resources/*.storyboardc"
+            io.puts ".DS_Store"
+            io.puts "nbproject"
+            io.puts ".redcar"
+            io.puts "#*#"
+            io.puts "*~"
+            io.puts "*.sw[po]"
+            io.puts ".eprj"
+            io.puts ".sass-cache"
+            io.puts ".idea"
           end
           App.log 'Create', File.join(app_name, 'Rakefile')
           File.open('Rakefile', 'w') do |io|

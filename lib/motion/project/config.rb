@@ -48,22 +48,24 @@ module Motion; module Project
     end
 
     variable :files, :xcode_dir, :sdk_version, :deployment_target, :frameworks,
-      :weak_frameworks, :libs, :delegate_class, :name, :build_dir,
+      :weak_frameworks, :framework_search_paths, :libs, :delegate_class, :name, :build_dir,
       :resources_dir, :specs_dir, :identifier, :codesign_certificate,
       :provisioning_profile, :device_family, :interface_orientations, :version,
       :short_version, :icons, :prerendered_icon, :background_modes, :seed_id,
-      :entitlements, :fonts, :status_bar_style, :motiondir
+      :entitlements, :fonts, :status_bar_style, :motiondir, :detect_dependencies
 
     # Internal only.
-    attr_accessor :build_mode, :spec_mode, :distribution_mode
+    attr_accessor :build_mode, :spec_mode, :distribution_mode, :dependencies
 
     def initialize(project_dir, build_mode)
       @project_dir = project_dir
       @files = Dir.glob(File.join(project_dir, 'app/**/*.rb'))
       @info_plist = {}
       @dependencies = {}
+      @detect_dependencies = true
       @frameworks = ['UIKit', 'Foundation', 'CoreGraphics']
       @weak_frameworks = []
+      @framework_search_paths = []
       @libs = []
       @delegate_class = 'AppDelegate'
       @name = 'Untitled'
@@ -154,12 +156,18 @@ EOS
       App.fail "Can't locate binary `#{name}' on the system."
     end
 
+    def xcode_version
+      @xcode_version ||= begin
+        txt = `#{locate_binary('xcodebuild')} -version`
+        vers = txt.scan(/Xcode\s(.+)/)[0][0]
+        build = txt.scan(/Build version\s(.+)/)[0][0]
+        [vers, build]
+      end
+    end
+
     def validate
       # Xcode version
-      ary = `#{locate_binary('xcodebuild')} -version`.scan(/Xcode\s+([^\n]+)\n/)
-      if ary and ary[0] and xcode_version = ary[0][0]
-        App.fail "Xcode 4.x or greater is required" if xcode_version < '4.0'
-      end
+      App.fail "Xcode 4.x or greater is required" if xcode_version[0] < '4.0'
 
       # sdk_version
       ['iPhoneSimulator', 'iPhoneOS'].each do |platform|
@@ -250,7 +258,7 @@ EOS
     def files_dependencies(deps_hash)
       res_path = lambda do |x|
         path = /^\./.match(x) ? x : File.join('.', x)
-        unless @files.include?(path)
+        unless @files.flatten.include?(path)
           App.fail "Can't resolve dependency `#{x}'"
         end
         path
@@ -284,15 +292,7 @@ EOS
 
     def ordered_build_files
       @ordered_build_files ||= begin
-        flat_deps = @files.map { |file| file_dependencies(file) }.flatten
-        paths = flat_deps.dup
-        flat_deps.each do |path|
-          n = paths.count(path)
-          if n > 1
-            (n - 1).times { paths.delete_at(paths.rindex(path)) }
-          end
-        end
-        paths
+        @files.flatten.map { |file| file_dependencies(file) }.flatten.uniq
       end
     end
 
@@ -313,8 +313,10 @@ EOS
           end
           deps << framework
         end
-        deps = deps.uniq.select { |dep| File.exist?(File.join(datadir, 'BridgeSupport', dep + '.bridgesupport')) }
-        deps << 'UIAutomation' if spec_mode
+        deps.uniq!
+        if @framework_search_paths.empty?
+          deps = deps.select { |dep| File.exist?(File.join(datadir, 'BridgeSupport', dep + '.bridgesupport')) }
+        end
         deps
       end
     end
@@ -332,6 +334,7 @@ EOS
       @bridgesupport_files ||= begin
         bs_files = []
         deps = ['RubyMotion'] + (frameworks_dependencies + weak_frameworks).uniq
+        deps << 'UIAutomation' if spec_mode
         deps.each do |framework|
           supported_versions.each do |ver|
             next if ver < deployment_target || sdk_version < ver
@@ -438,9 +441,7 @@ EOS
     end
 
     def common_flags(platform)
-      cflags = "#{arch_flags(platform)} -isysroot \"#{sdk(platform)}\" -miphoneos-version-min=#{deployment_target} -F#{sdk(platform)}/System/Library/Frameworks"
-      cflags << " -F#{sdk(platform)}/Developer/Library/PrivateFrameworks" if spec_mode # For UIAutomation
-      cflags
+      "#{arch_flags(platform)} -isysroot \"#{sdk(platform)}\" -miphoneos-version-min=#{deployment_target} -F#{sdk(platform)}/System/Library/Frameworks"
     end
 
     def cflags(platform, cplusplus)
@@ -553,8 +554,22 @@ EOS
       @info_plist
     end
 
+    def dt_info_plist
+{
+}
+    end
+
     def info_plist_data
-      info_plist.merge!({
+      ios_version_to_build = lambda do |vers|
+        # XXX we should retrieve these values programmatically.
+        case vers
+          when '4.3'; '8F191m'
+          when '5.0'; '9A334'
+          when '5.1'; '9B176'
+          else; '10A403' # 6.0 or later
+        end
+      end
+      Motion::PropertyList.to_s({
         'BuildMachineOSBuild' => `sw_vers -buildVersion`.strip,
         'MinimumOSVersion' => deployment_target,
         'CFBundleDevelopmentRegion' => 'en',
@@ -581,16 +596,22 @@ EOS
         'UISupportedInterfaceOrientations' => interface_orientations_consts,
         'UIStatusBarStyle' => status_bar_style_const,
         'UIBackgroundModes' => background_modes_consts,
-        'DTXcode' => '0431',
-        'DTSDKName' => 'iphoneos5.0',
-        'DTSDKBuild' => '9A334',
+        'DTXcode' => begin
+          vers = xcode_version[0].gsub(/\./, '')
+          if vers.length == 2
+            '0' + vers + '0'
+          else
+            '0' + vers
+          end
+        end,
+        'DTXcodeBuild' => xcode_version[1],
+        'DTSDKName' => "iphoneos#{sdk_version}",
+        'DTSDKBuild' => ios_version_to_build.call(sdk_version),
         'DTPlatformName' => 'iphoneos',
         'DTCompiler' => 'com.apple.compilers.llvm.clang.1_0',
-        'DTPlatformVersion' => '5.1',
-        'DTXcodeBuild' => '4E1019',
-        'DTPlatformBuild' => '9B176'
-      })
-      Motion::PropertyList.to_s(info_plist)
+        'DTPlatformVersion' => sdk_version,
+        'DTPlatformBuild' => ios_version_to_build.call(sdk_version)
+      }.merge(dt_info_plist).merge(info_plist))
     end
 
     def pkginfo_data
@@ -689,7 +710,7 @@ EOS
       a = sdk_version.scan(/(\d+)\.(\d+)/)[0]
       sdk_version_headers = ((a[0].to_i * 10000) + (a[1].to_i * 100)).to_s
       extra_flags = OSX_VERSION >= 10.7 ? '--no-64-bit' : ''
-      sh "RUBYOPT='' /usr/bin/gen_bridge_metadata --format complete #{extra_flags} --cflags \"-isysroot #{sdk_path} -miphoneos-version-min=#{sdk_version} -D__ENVIRONMENT_IPHONE_OS_VERSION_MIN_REQUIRED__=#{sdk_version_headers} -I. #{includes.join(' ')}\" #{headers.join(' ')} -o \"#{bs_file}\""
+      sh "RUBYOPT='' /usr/bin/gen_bridge_metadata --format complete #{extra_flags} --cflags \"-isysroot #{sdk_path} -miphoneos-version-min=#{sdk_version} -D__ENVIRONMENT_IPHONE_OS_VERSION_MIN_REQUIRED__=#{sdk_version_headers} -I. #{includes.join(' ')}\" #{headers.map { |x| "\"#{x}\"" }.join(' ')} -o \"#{bs_file}\""
     end
   end
 end; end
