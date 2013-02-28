@@ -49,7 +49,7 @@ module Motion; module Project
 
     variable :files, :xcode_dir, :sdk_version, :deployment_target, :frameworks,
       :weak_frameworks, :framework_search_paths, :libs, :delegate_class, :name, :build_dir,
-      :resources_dir, :specs_dir, :identifier, :codesign_certificate,
+      :resources_dirs, :specs_dir, :identifier, :codesign_certificate,
       :provisioning_profile, :device_family, :interface_orientations, :version,
       :short_version, :icons, :prerendered_icon, :background_modes, :seed_id,
       :entitlements, :fonts, :status_bar_style, :motiondir, :detect_dependencies
@@ -69,7 +69,7 @@ module Motion; module Project
       @libs = []
       @delegate_class = 'AppDelegate'
       @name = 'Untitled'
-      @resources_dir = File.join(project_dir, 'resources')
+      @resources_dirs = [File.join(project_dir, 'resources')]
       @build_dir = File.join(project_dir, 'build')
       @specs_dir = File.join(project_dir, 'spec')
       @device_family = :iphone
@@ -146,12 +146,21 @@ EOS
 
         App.fail "Can't locate any version of Xcode on the system."
       end
+      unescape_path(@xcode_dir)
+    end
+
+    def unescape_path(path)
+      path.gsub('\\', '')
+    end
+
+    def escape_path(path)
+      path.gsub(' ', '\\ ')
     end
 
     def locate_binary(name)
       [File.join(xcode_dir, 'usr/bin'), '/usr/bin'].each do |dir|
         path = File.join(dir, name)
-        return path if File.exist?(path)
+        return escape_path(path) if File.exist?(path)
       end
       App.fail "Can't locate binary `#{name}' on the system."
     end
@@ -196,6 +205,16 @@ EOS
       @supported_versions ||= Dir.glob(File.join(motiondir, 'data/*')).select{|path| File.directory?(path)}.map do |path|
         File.basename path
       end
+    end
+
+    def resources_dir
+      warn("`app.resources_dir' is deprecated; use `app.resources_dirs'");
+      @resources_dirs.first
+    end
+
+    def resources_dir=(dir)
+      warn("`app.resources_dir' is deprecated; use `app.resources_dirs'");
+      @resources_dirs = [dir]
     end
 
     def build_dir
@@ -407,8 +426,9 @@ EOS
     end
 
     def sdk(platform)
-      File.join(platform_dir(platform), 'Developer/SDKs',
+      path = File.join(platform_dir(platform), 'Developer/SDKs',
         platform + sdk_version + '.sdk')
+      escape_path(path)
     end
 
     def locate_compiler(platform, *execs)
@@ -418,7 +438,7 @@ EOS
       execs.each do |exec|
         paths.each do |path|
           cc = File.join(path, exec)
-          return cc if File.exist?(cc)
+          return escape_path(cc) if File.exist?(cc)
         end
       end
       App.fail "Can't locate compilers for platform `#{platform}'"
@@ -441,7 +461,7 @@ EOS
     end
 
     def common_flags(platform)
-      "#{arch_flags(platform)} -isysroot \"#{sdk(platform)}\" -miphoneos-version-min=#{deployment_target} -F#{sdk(platform)}/System/Library/Frameworks"
+      "#{arch_flags(platform)} -isysroot \"#{unescape_path(sdk(platform))}\" -miphoneos-version-min=#{deployment_target} -F#{sdk(platform)}/System/Library/Frameworks"
     end
 
     def cflags(platform, cplusplus)
@@ -694,12 +714,14 @@ EOS
 
     def fonts
       @fonts ||= begin
-        if File.exist?(resources_dir)
-          Dir.chdir(resources_dir) do
-            Dir.glob('*.{otf,ttf}')
+        resources_dirs.flatten.inject([]) do |fonts, dir|
+          if File.exist?(dir)
+            Dir.chdir(dir) do
+              fonts.concat(Dir.glob('*.{otf,ttf}'))
+            end
+          else
+            fonts
           end
-        else
-          []
         end
       end
     end

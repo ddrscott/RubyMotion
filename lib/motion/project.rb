@@ -85,14 +85,15 @@ task :simulator => ['build:simulator'] do
 
   # Configure the SimulateDevice variable (the only way to specify if we want to run in retina mode or not).
   simulate_device = App.config.device_family_string(family_int, target, retina)
-  if ENV['reuse'].nil? and `/usr/bin/defaults read com.apple.iphonesimulator "SimulateDevice"`.strip != simulate_device
+  default_simulator = `/usr/bin/defaults read com.apple.iphonesimulator "SimulateDevice"`.strip
+  if default_simulator != simulate_device && default_simulator != "'#{simulate_device}'"
     system("/usr/bin/killall \"iPhone Simulator\" >& /dev/null")
     system("/usr/bin/defaults write com.apple.iphonesimulator \"SimulateDevice\" \"'#{simulate_device}'\"")
   end
 
   # Launch the simulator.
   xcode = App.config.xcode_dir
-  env = xcode.match(/^\/Applications/) ? "DYLD_FRAMEWORK_PATH=\"#{xcode}/../Frameworks\":\"#{xcode}/../OtherFrameworks\"" : ''
+  env = "DYLD_FRAMEWORK_PATH=\"#{xcode}/../Frameworks\":\"#{xcode}/../OtherFrameworks\""
   env << ' SIM_SPEC_MODE=1' if App.config.spec_mode
   sim = File.join(App.config.bindir, 'sim')
   debug = (ENV['debug'] ? 1 : (App.config.spec_mode ? '0' : '2'))
@@ -150,13 +151,12 @@ task :deploy do
   sh "#{env} #{deploy} #{flags} \"#{device_id}\" \"#{App.config.archive}\""
 end
 
-
 desc "Clear build objects"
 task :clean do
   App.info 'Delete', App.config.build_dir
   rm_rf(App.config.build_dir)
   App.config.vendor_projects.each { |vendor| vendor.clean }
-  Dir.glob(App.config.resources_dir + '/**/*.{nib,storyboardc,momd}').each do |p|
+  Dir.glob(App.config.resources_dirs.flatten.map{ |x| x + '/**/*.{nib,storyboardc,momd}' }).each do |p|
     App.info 'Delete', p
     rm_rf p
   end
